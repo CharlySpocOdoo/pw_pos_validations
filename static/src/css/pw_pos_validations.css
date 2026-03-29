@@ -1,0 +1,19 @@
+/* =============================================================
+   pw_pos_validations — Artículos Vendidos
+   Se integra dentro del div.order-summary del OrderWidget
+   ============================================================= */
+
+.pw-articulos-vendidos {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    font-size: 0.875rem;      /* fs-6 equivalente, igual que "Taxes" */
+    font-weight: 700;
+    line-height: 1.25;
+    color: #6c757d;           /* text-muted, igual que la fila de impuestos */
+}
+
+.pw-articulos-count {
+    color: #017e84;           /* color acento del POS de Odoo */
+}

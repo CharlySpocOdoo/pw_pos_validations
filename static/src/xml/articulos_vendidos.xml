@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <!--
+        Componente: ArticulosVendidos
+        Muestra la suma de unidades de todas las líneas positivas de la orden activa.
+        Se renderiza como una fila dentro del bloque order-summary del OrderWidget.
+    -->
+    <t t-name="pw_pos_validations.ArticulosVendidos">
+        <div class="pw-articulos-vendidos" t-if="totalArticulos > 0">
+            <span>Artículos Vendidos</span>
+            <span class="pw-articulos-count" t-esc="totalArticulos"/>
+        </div>
+    </t>
+
+    <!--
+        Herencia del template OrderWidget.
+        Insertamos el componente ArticulosVendidos ANTES de la fila de impuestos,
+        dentro del div.order-summary que ya existe en el template original.
+
+        Estructura original del div.order-summary:
+            [div taxes]   ← fila de impuestos (condicional)
+            [div total]   ← fila de total
+
+        Resultado tras el patch:
+            [ArticulosVendidos]  ← nuestro contador ✅
+            [div taxes]
+            [div total]
+    -->
+    <t t-name="pw_pos_validations.OrderWidgetInherit"
+       t-inherit="point_of_sale.OrderWidget"
+       t-inherit-mode="extension">
+        <xpath expr="//div[hasclass('order-summary')]" position="prepend">
+            <ArticulosVendidos t-if="totalArticulos > 0" totalArticulos="totalArticulos"/>
+        </xpath>
+    </t>
+
+</templates>
