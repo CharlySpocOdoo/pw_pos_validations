@@ -2,43 +2,121 @@
 
 import { OrderSummary } from "@point_of_sale/app/screens/product_screen/order_summary/order_summary";
 import { patch } from "@web/core/utils/patch";
+import { AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
+import { _t } from "@web/core/l10n/translation";
 
 /**
- * Patch de OrderSummary._handleNegationOnFirstInput
+ * Patch de OrderSummary para validaciones de cantidad en el numpad.
  *
- * Este método es llamado EXACTAMENTE cuando el cajero presiona el botón "-"
- * en el numpad mientras el buffer está en "-0", es decir, es el momento
- * preciso en que se intenta negar una cantidad manualmente.
+ * Se interviene en dos métodos:
  *
- * Lógica original: convierte el buffer a negativo (cantidad * -1).
- * Nuestra lógica: si la línea seleccionada NO es una línea de devolución
- * (no tiene refunded_orderline_id), bloqueamos la negación silenciosamente
- * devolviendo el buffer sin cambios (queda en "0" o en el valor anterior).
+ * 1. updateSelectedOrderline — punto central donde llegan TODAS las
+ *    teclas del numpad antes de aplicarse a la línea. Aquí validamos:
  *
- * Las líneas de devolución generadas por el sistema SÍ tienen
- * refunded_orderline_id, por lo que el negativo se permite normalmente.
+ *    a) DECIMALES: Si el buffer contiene "." bloqueamos la tecla,
+ *       reseteamos el buffer al valor entero actual de la línea
+ *       y mostramos un diálogo de error. Esto evita el estado
+ *       inconsistente donde el buffer queda bloqueado.
  *
- * @param {string} buffer - Estado actual del buffer del numpad
- * @param {string} key    - Tecla presionada (en este caso siempre "-")
- * @param {Object} selectedLine - Línea de orden seleccionada actualmente
- * @returns {string} buffer — modificado o no según la validación
+ *    b) NEGATIVOS MANUALES: Si el buffer resultante es negativo y la
+ *       línea no es una devolución del sistema, bloqueamos, reseteamos
+ *       el buffer al valor actual y mostramos diálogo de error.
+ *
+ * 2. _handleNegationOnFirstInput — intercepta el caso específico donde
+ *    el cajero presiona +/- en una línea que ya tiene cantidad (ej: 25).
+ *    En ese caso el buffer se convierte directamente a -25 sin pasar
+ *    por updateSelectedOrderline, así que lo bloqueamos aquí también.
  */
 patch(OrderSummary.prototype, {
 
-    _handleNegationOnFirstInput(buffer, key, selectedLine) {
-        // Solo actuar cuando se cumple la condición del negativo manual:
-        // buffer es "-0" y la tecla presionada es "-"
-        if (buffer === "-0" && key === "-") {
-            // Si la línea NO es una devolución del sistema, bloquear silenciosamente.
-            // Devolvemos "0" para que el buffer quede limpio sin aplicar el negativo.
-            if (selectedLine && !selectedLine.refunded_orderline_id) {
-                this.numberBuffer.state.buffer = "0";
-                return "0";
+    /**
+     * Muestra un diálogo de error con un solo botón OK.
+     * @param {string} title
+     * @param {string} body
+     */
+    _mostrarErrorValidacion(title, body) {
+        this.dialog.add(AlertDialog, { title, body });
+    },
+
+    /**
+     * Resetea el buffer del numpad al valor entero actual de la línea seleccionada.
+     * Esto evita que el buffer quede en estado inconsistente tras un rechazo.
+     */
+    _resetBufferAlValorActual() {
+        const selectedLine = this.currentOrder?.get_selected_orderline();
+        if (selectedLine) {
+            const cantidadActual = Math.trunc(Math.abs(selectedLine.get_quantity()));
+            this.numberBuffer.state.buffer = cantidadActual > 0
+                ? cantidadActual.toString()
+                : "1";
+        } else {
+            this.numberBuffer.reset();
+        }
+    },
+
+    /**
+     * Punto central de entrada del numpad.
+     * Validamos aquí porque tenemos acceso a dialog, numberBuffer y la línea.
+     */
+    async updateSelectedOrderline({ buffer, key }) {
+        const order = this.pos.get_order();
+        const selectedLine = order?.get_selected_orderline();
+
+        // Solo validar cuando el modo es "quantity"
+        if (selectedLine && this.pos.numpadMode === "quantity") {
+            const esDevolucion = Boolean(selectedLine.refunded_orderline_id);
+
+            // ── Validación 1: Bloquear punto decimal ──────────────────────────
+            // Si la tecla presionada es "." o el buffer contiene ".",
+            // rechazamos y reseteamos al valor entero actual.
+            if (key === "." || (buffer && buffer.includes("."))) {
+                this._resetBufferAlValorActual();
+                this._mostrarErrorValidacion(
+                    _t("Cantidad no permitida"),
+                    _t("No se permiten cantidades decimales. Solo se pueden vender piezas enteras.")
+                );
+                return;
+            }
+
+            // ── Validación 2: Bloquear negativos manuales ─────────────────────
+            // Si el buffer resultante es un número negativo y NO es devolución.
+            if (!esDevolucion && buffer !== null) {
+                const valorBuffer = parseFloat(buffer);
+                if (!isNaN(valorBuffer) && valorBuffer < 0) {
+                    this._resetBufferAlValorActual();
+                    this._mostrarErrorValidacion(
+                        _t("Cantidad no permitida"),
+                        _t("No se permiten cantidades negativas. Para hacer una devolución utiliza la función de devolución del sistema.")
+                    );
+                    return;
+                }
             }
         }
 
-        // En cualquier otro caso (devoluciones del sistema, otras teclas),
-        // llamamos al comportamiento original sin modificar nada.
+        // Sin validaciones que bloquear: flujo original
+        return super.updateSelectedOrderline({ buffer, key });
+    },
+
+    /**
+     * Intercepta el caso donde el cajero presiona +/- sobre una línea
+     * que ya tiene cantidad (ej: 25 → intenta convertir a -25).
+     * Este caso NO pasa por updateSelectedOrderline, tiene su propio flujo.
+     */
+    _handleNegationOnFirstInput(buffer, key, selectedLine) {
+        if (key === "-" && selectedLine && !selectedLine.refunded_orderline_id) {
+            // Resetear buffer al valor entero actual y mostrar error
+            const cantidadActual = Math.trunc(Math.abs(selectedLine.get_quantity()));
+            this.numberBuffer.state.buffer = cantidadActual > 0
+                ? cantidadActual.toString()
+                : "1";
+            this._mostrarErrorValidacion(
+                _t("Cantidad no permitida"),
+                _t("No se permiten cantidades negativas. Para hacer una devolución utiliza la función de devolución del sistema.")
+            );
+            return this.numberBuffer.state.buffer;
+        }
+
+        // Si es devolución del sistema, permitir el negativo normalmente
         return super._handleNegationOnFirstInput(buffer, key, selectedLine);
     },
 });
